@@ -16,7 +16,7 @@ import pandas as pd
 import psutil
 import pytz
 from sklearn.metrics import accuracy_score
-from sktime.utils.load_data import load_from_tsfile_to_dataframe
+from sktime.utils.data_io import load_from_tsfile_to_dataframe
 
 from multirocket.multirocket import MultiRocket
 from utils.data_loader import process_ts_data
@@ -30,7 +30,7 @@ itr = 0
 kernel_selection = 0
 num_features = 10000
 feature_id = 202
-save = False
+save = True
 num_threads = 0
 
 try:
@@ -107,6 +107,7 @@ if __name__ == '__main__':
 
         X_train = process_ts_data(X_train, normalise=False)
         X_test = process_ts_data(X_test, normalise=False)
+        breakpoint()
         if kernel_selection == 0:
             # for now, change type to float32. will standardise in future.
             X_train = X_train.astype(np.float32)
