@@ -7,6 +7,7 @@ import time
 
 import numpy as np
 from sklearn.linear_model import RidgeClassifierCV
+from sklearn.model_selection import TimeSeriesSplit
 
 from multirocket import feature_names, get_feature_set
 # from multirocket import minirocket as minirocket
@@ -50,8 +51,11 @@ class MultiRocket:
         print('FeatureID: {} -- features for each kernel: {}'.format(self.feature_id, self.feature_list))
 
         print('Creating {} with {} kernels'.format(self.name, self.num_kernels))
+        print('Using time series split')
+        cv = TimeSeriesSplit(5)
         self.classifier = RidgeClassifierCV(alphas=np.logspace(-3, 3, 10),
-                                            normalize=True)
+                                            normalize=True,
+                                            cv=cv)
 
         self.train_duration = 0
         self.test_duration = 0
@@ -125,6 +129,31 @@ class MultiRocket:
                                                                                x_test_transform.shape))
 
         yhat = self.classifier.predict(x_test_transform)
+        self.test_duration = time.perf_counter() - start_time
+
+        print("[{}] Predicting completed, took {:.3f}s".format(self.name, self.test_duration))
+
+        return yhat
+
+
+    def predict_proba(self, x):
+        print('[{}] Predicting'.format(self.name))
+        start_time = time.perf_counter()
+
+        if self.kernel_selection == 0:
+            # swap the axes for minirocket kernels. will standardise the axes in future.
+            x = x.swapaxes(1, 2)
+
+            x_test_transform = minirocket.transform(x, self.kernels)
+        else:
+            x_test_transform = rocket.apply_kernels(x, self.kernels, self.feature_id)
+
+        self.apply_kernel_on_test_duration = time.perf_counter() - start_time
+        x_test_transform = np.nan_to_num(x_test_transform)
+        print('Kernels applied!, took {:.3f}s. Transformed shape: {}. '.format(self.apply_kernel_on_test_duration,
+                                                                               x_test_transform.shape))
+
+        yhat = self.classifier._predict_proba_lr(x_test_transform)
         self.test_duration = time.perf_counter() - start_time
 
         print("[{}] Predicting completed, took {:.3f}s".format(self.name, self.test_duration))

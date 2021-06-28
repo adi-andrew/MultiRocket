@@ -1,2 +1,14 @@
 /output/
 /.idea
+catch22/
+__init__.*
+minirocket*
+multirocket.*
+rocket.*
+tools.*
+
+data/
+meta_data/
+data_utils.*
+get_daily_data_av.*
+data_loader.*

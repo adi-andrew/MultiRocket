@@ -1,0 +1,13 @@
+name: MR
+dependencies:
+ - python=3.8
+ - numba
+ - numpy
+ - pandas
+ - scikit-learn
+ - psutil
+ - pip
+ - pip:
+   - catch22
+   - sktime
+   - scikit-learn-intelex
