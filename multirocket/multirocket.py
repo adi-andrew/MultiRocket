@@ -7,6 +7,7 @@ import time
 
 import numpy as np
 from sklearn.linear_model import RidgeClassifierCV
+from sklearn.linear_model import RidgeClassifier
 from sklearn.model_selection import TimeSeriesSplit
 
 from multirocket import feature_names, get_feature_set
@@ -20,7 +21,8 @@ class MultiRocket:
     def __init__(self,
                  num_features=10000,
                  feature_id=22,
-                 kernel_selection=0):
+                 kernel_selection=0,
+                 foldIds=None):
         """
         MultiRocket
         :param num_features: number of features
@@ -51,11 +53,14 @@ class MultiRocket:
         print('FeatureID: {} -- features for each kernel: {}'.format(self.feature_id, self.feature_list))
 
         print('Creating {} with {} kernels'.format(self.name, self.num_kernels))
-        print('Using time series split')
-        cv = TimeSeriesSplit(5)
-        self.classifier = RidgeClassifierCV(alphas=np.logspace(-3, 3, 10),
-                                            normalize=True,
-                                            cv=cv)
+        # print('Using time series split')
+        # cv = TimeSeriesSplit(5)
+        # self.classifier = RidgeClassifierCV(alphas=np.logspace(-3, 3, 10),
+        #                                     normalize=True,
+        #                                     cv=cv)
+        self.foldIds = foldIds
+        self.classifier = RidgeClassifier(alpha = 1e-3,
+                                          normalize=True)
 
         self.train_duration = 0
         self.test_duration = 0
@@ -63,7 +68,7 @@ class MultiRocket:
         self.apply_kernel_on_train_duration = 0
         self.apply_kernel_on_test_duration = 0
 
-    def fit(self, x_train, y_train, predict_on_train=True):
+    def fit_kernels(self, x_train):
         start_time = time.perf_counter()
 
         print('[{}] Training with training set of {}'.format(self.name, x_train.shape))
@@ -97,17 +102,26 @@ class MultiRocket:
         elapsed_time = time.perf_counter() - start_time
         print('Kernels applied!, took {}s'.format(elapsed_time))
         print('Transformed Shape {}'.format(x_train_transform.shape))
+        return x_train_transform
+
+    def fit_cv(self, x_train, y_train):
 
         print('Training')
         _start_time = time.perf_counter()
-        self.classifier.fit(x_train_transform, y_train)
+
+        yhat=[]
+        N = len(self.foldIds)
+        for i, fold in enumerate(self.foldIds):
+            print(f'Traning fold {i}/{N}')
+            x_train_transform = self.fit_kernels(x_train[fold[0]])
+            self.classifier.fit(x_train_transform, y_train[fold[0]])
+
+            # predict fold
+            yhat.append(self.predict_proba(x_train[fold[1]]))
+
         self.train_duration = time.perf_counter() - _start_time
 
         print('Training done!, took {:.3f}s'.format(self.train_duration))
-        if predict_on_train:
-            yhat = self.classifier.predict(x_train_transform)
-        else:
-            yhat = None
 
         return yhat
 
