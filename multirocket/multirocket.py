@@ -6,9 +6,10 @@
 import time
 
 import numpy as np
-from sklearn.linear_model import RidgeClassifierCV
+from sklearn.linear_model import Ridge
 from sklearn.linear_model import RidgeClassifier
-from sklearn.model_selection import TimeSeriesSplit
+from sklearn.linear_model import ElasticNet
+# from sklearn.model_selection import TimeSeriesSplit
 
 from multirocket import feature_names, get_feature_set
 # from multirocket import minirocket as minirocket
@@ -22,7 +23,10 @@ class MultiRocket:
                  num_features=10000,
                  feature_id=22,
                  kernel_selection=0,
-                 foldIds=None):
+                 foldIds=None,
+                 output_model='RidgeClassifier',
+                 alpha=1e-1,
+                 l1_ratio=0.5):
         """
         MultiRocket
         :param num_features: number of features
@@ -59,8 +63,21 @@ class MultiRocket:
         #                                     normalize=True,
         #                                     cv=cv)
         self.foldIds = foldIds
-        self.classifier = RidgeClassifier(alpha = 1e-3,
-                                          normalize=True)
+
+        self.output_model = output_model
+        if output_model == 'RidgeClassifier':
+            self.classifier = RidgeClassifier(alpha=alpha,
+                                            normalize=True)
+        elif output_model == 'RidgeRegression':
+            self.regressor = Ridge(alpha=alpha,
+                                   normalize=True)
+        elif output_model == 'ElasticNet':
+            self.regressor = ElasticNet(alpha=alpha,
+                                        l1_ratio=l1_ratio,
+                                        normalize=True)
+        else:
+            print(f'Unknown output_model {output_model}')
+            exit
 
         self.train_duration = 0
         self.test_duration = 0
@@ -112,12 +129,15 @@ class MultiRocket:
         yhat=[]
         N = len(self.foldIds)
         for i, fold in enumerate(self.foldIds):
-            print(f'Traning fold {i}/{N}')
+            print(f'Traning fold {i+1}/{N}')
             x_train_transform = self.fit_kernels(x_train[fold[0]])
-            self.classifier.fit(x_train_transform, y_train[fold[0]])
 
-            # predict fold
-            yhat.append(self.predict_proba(x_train[fold[1]]))
+            if self.output_model == 'RidgeClassifier':
+                self.classifier.fit(x_train_transform, y_train[fold[0]])
+                yhat.append(self.predict_proba(x_train[fold[1]]))
+            elif self.output_model in ['RidgeRegression', 'ElasticNet']:
+                self.regressor.fit(x_train_transform, y_train[fold[0]])
+                yhat.append(self.predict_linear(x_train[fold[1]]))
 
         self.train_duration = time.perf_counter() - _start_time
 
@@ -168,6 +188,31 @@ class MultiRocket:
                                                                                x_test_transform.shape))
 
         yhat = self.classifier._predict_proba_lr(x_test_transform)
+        self.test_duration = time.perf_counter() - start_time
+
+        print("[{}] Predicting completed, took {:.3f}s".format(self.name, self.test_duration))
+
+        return yhat
+
+
+    def predict_linear(self, x):
+        print('[{}] Predicting'.format(self.name))
+        start_time = time.perf_counter()
+
+        if self.kernel_selection == 0:
+            # swap the axes for minirocket kernels. will standardise the axes in future.
+            x = x.swapaxes(1, 2)
+
+            x_test_transform = minirocket.transform(x, self.kernels)
+        else:
+            x_test_transform = rocket.apply_kernels(x, self.kernels, self.feature_id)
+
+        self.apply_kernel_on_test_duration = time.perf_counter() - start_time
+        x_test_transform = np.nan_to_num(x_test_transform)
+        print('Kernels applied!, took {:.3f}s. Transformed shape: {}. '.format(self.apply_kernel_on_test_duration,
+                                                                               x_test_transform.shape))
+
+        yhat = self.regressor.predict(x_test_transform)
         self.test_duration = time.perf_counter() - start_time
 
         print("[{}] Predicting completed, took {:.3f}s".format(self.name, self.test_duration))
