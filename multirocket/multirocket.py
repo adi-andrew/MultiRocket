@@ -130,20 +130,43 @@ class MultiRocket:
         N = len(self.foldIds)
         for i, fold in enumerate(self.foldIds):
             print(f'Traning fold {i+1}/{N}')
-            x_train_transform = self.fit_kernels(x_train[fold[0]])
-
-            if self.output_model == 'RidgeClassifier':
-                self.classifier.fit(x_train_transform, y_train[fold[0]])
-                yhat.append(self.predict_proba(x_train[fold[1]]))
-            elif self.output_model in ['RidgeRegression', 'ElasticNet']:
-                self.regressor.fit(x_train_transform, y_train[fold[0]])
-                yhat.append(self.predict_linear(x_train[fold[1]]))
+            yhat = self.train_fold(x=x_train[fold[0]],
+                                   y=y_train[fold[0]],
+                                   x_test=x_train[fold[1]],
+                                   yhat=yhat)
 
         self.train_duration = time.perf_counter() - _start_time
 
         print('Training done!, took {:.3f}s'.format(self.train_duration))
 
         return yhat
+
+
+    def train_fold(self, x, y, x_test=None, yhat=None):
+        x_train_transform = self.fit_kernels(x)
+        if self.output_model == 'RidgeClassifier':
+            self.classifier.fit(x_train_transform, y)
+            if x_test is None:
+                yhat = self.self.classifier._predict_proba_lr(x_train_transform)
+            else:
+                yhat.append(self.predict_proba(x_test))
+        elif self.output_model in ['RidgeRegression', 'ElasticNet']:
+            self.regressor.fit(x_train_transform, y)
+            if x_test is None:
+                yhat = self.regressor.predict(x_train_transform)
+            else:
+                yhat.append(self.predict_linear(x_test))
+        return yhat
+
+
+    def fit(self, x_train, y_train):
+        print('Training')
+        _start_time = time.perf_counter()
+        yhat=self.train_fold(x_train, y_train)
+        self.train_duration = time.perf_counter() - _start_time
+        print('Training done!, took {:.3f}s'.format(self.train_duration))
+        return yhat
+
 
     def predict(self, x):
         print('[{}] Predicting'.format(self.name))
