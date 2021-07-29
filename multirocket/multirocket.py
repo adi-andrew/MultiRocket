@@ -9,6 +9,8 @@ import numpy as np
 from sklearn.linear_model import Ridge
 from sklearn.linear_model import RidgeClassifier
 from sklearn.linear_model import ElasticNet
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
 # from sklearn.model_selection import TimeSeriesSplit
 
 from multirocket import feature_names, get_feature_set
@@ -26,7 +28,8 @@ class MultiRocket:
                  foldIds=None,
                  output_model='RidgeClassifier',
                  alpha=1e-1,
-                 l1_ratio=0.5):
+                 l1_ratio=0.5,
+                 normalize=True):
         """
         MultiRocket
         :param num_features: number of features
@@ -68,6 +71,9 @@ class MultiRocket:
         if output_model == 'RidgeClassifier':
             self.classifier = RidgeClassifier(alpha=alpha,
                                             normalize=True)
+        elif output_model == 'LogisticRegression':
+            self.classifier = LogisticRegression(C=alpha,
+                                                 multi_class='multinomial')
         elif output_model == 'RidgeRegression':
             self.regressor = Ridge(alpha=alpha,
                                    normalize=True)
@@ -78,6 +84,9 @@ class MultiRocket:
         else:
             print(f'Unknown output_model {output_model}')
             exit
+
+        if normalize:
+            self.scaler = StandardScaler(copy=False)
 
         self.train_duration = 0
         self.test_duration = 0
@@ -147,9 +156,17 @@ class MultiRocket:
         if self.output_model == 'RidgeClassifier':
             self.classifier.fit(x_train_transform, y)
             if x_test is None:
-                yhat = self.self.classifier._predict_proba_lr(x_train_transform)
+                yhat = self.classifier._predict_proba_lr(x_train_transform)
             else:
                 yhat.append(self.predict_proba(x_test))
+        elif self.output_model == 'LogisticRegression':
+            x_train_transform = self.scaler.fit_transform(x_train_transform)
+            self.classifier.fit(x_train_transform, y)
+            if x_test is None:
+                yhat = self.predict_proba(x_train_transform)
+            else:
+                yhat.append(self.predict_proba(x_test))
+
         elif self.output_model in ['RidgeRegression', 'ElasticNet']:
             self.regressor.fit(x_train_transform, y)
             if x_test is None:
@@ -200,7 +217,6 @@ class MultiRocket:
         if self.kernel_selection == 0:
             # swap the axes for minirocket kernels. will standardise the axes in future.
             x = x.swapaxes(1, 2)
-
             x_test_transform = minirocket.transform(x, self.kernels)
         else:
             x_test_transform = rocket.apply_kernels(x, self.kernels, self.feature_id)
@@ -209,8 +225,11 @@ class MultiRocket:
         x_test_transform = np.nan_to_num(x_test_transform)
         print('Kernels applied!, took {:.3f}s. Transformed shape: {}. '.format(self.apply_kernel_on_test_duration,
                                                                                x_test_transform.shape))
-
-        yhat = self.classifier._predict_proba_lr(x_test_transform)
+        if self.output_model == 'LogisticRegression':
+            x_test_transform = self.scaler.transform(x_test_transform)
+            yhat = self.classifier.predict_proba(x_test_transform)
+        else:
+            yhat = self.classifier._predict_proba_lr(x_test_transform)
         self.test_duration = time.perf_counter() - start_time
 
         print("[{}] Predicting completed, took {:.3f}s".format(self.name, self.test_duration))
