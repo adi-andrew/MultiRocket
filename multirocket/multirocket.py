@@ -10,6 +10,7 @@ from sklearn.linear_model import Ridge
 from sklearn.linear_model import RidgeClassifier
 from sklearn.linear_model import ElasticNet
 from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import SGDClassifier
 from sklearn.preprocessing import StandardScaler
 # from sklearn.model_selection import TimeSeriesSplit
 
@@ -29,6 +30,7 @@ class MultiRocket:
                  output_model='RidgeClassifier',
                  alpha=1e-1,
                  l1_ratio=0.5,
+                 max_iter=5,
                  normalize=True):
         """
         MultiRocket
@@ -73,7 +75,19 @@ class MultiRocket:
                                             normalize=True)
         elif output_model == 'LogisticRegression':
             self.classifier = LogisticRegression(C=alpha,
-                                                 multi_class='multinomial')
+                                                 multi_class='multinomial',
+                                                 class_weight='balanced',
+                                                 tol=1e-2,
+                                                 max_iter=max_iter,
+                                                 solver='lbfgs')
+        elif output_model == 'SGDClassifier':
+            self.classifier = SGDClassifier(loss='log',
+                                            alpha=alpha,
+                                            penalty='l2',
+                                            class_weight='balanced',
+                                            tol=1e-3,
+                                            max_iter=max_iter,
+                                            n_jobs=10)
         elif output_model == 'RidgeRegression':
             self.regressor = Ridge(alpha=alpha,
                                    normalize=True)
@@ -130,6 +144,57 @@ class MultiRocket:
         print('Transformed Shape {}'.format(x_train_transform.shape))
         return x_train_transform
 
+
+    def fit_all_kernels(self, x_train):
+        N = len(self.foldIds)
+        x_train_transform_folds=[]
+        x_test_transform_folds=[]
+        for i, fold in enumerate(self.foldIds):
+            print(f'Fitting kernel to fold {i+1}/{N}')
+            x_train_transform = self.fit_kernels(x_train[fold[0]])
+            x_train_transform = self.scaler.fit_transform(x_train_transform)
+            x_train_transform_folds.append(x_train_transform)
+
+            self._start_time = time.perf_counter()
+            x_test_transform = self.transform_x(x_train[fold[1]])
+            x_test_transform = self.scaler.transform(x_test_transform)
+            x_test_transform_folds.append(x_test_transform)
+        return x_train_transform_folds, x_test_transform_folds
+
+
+    def train_fold_on_kernel(self, x, y, x_test=None, yhat=None):
+        if self.output_model in ['LogisticRegression', 'SGDClassifier']:
+            self.classifier.fit(x, y)
+            yhat = self.classifier.predict_proba(x_test)
+            
+        elif self.output_model in ['RidgeRegression', 'ElasticNet']:
+            self.regressor.fit(x, y)
+            yhat = self.regressor.predict(x_test)
+
+        return yhat
+
+
+    def fit_cv_to_kernels(self, x_train, x_test, y_train):
+
+        print('Training')
+        self._start_time = time.perf_counter()
+
+        yhat=[]
+        N = len(self.foldIds)
+        for i, fold in enumerate(self.foldIds):
+            print(f'Traning fold {i+1}/{N}')
+            yhat.append(self.train_fold_on_kernel(x=x_train[i],
+                                             y=y_train[fold[0]],
+                                             x_test=x_test[i],
+                                             yhat=yhat))
+
+        self.train_duration = time.perf_counter() - self._start_time
+
+        print('Training done!, took {:.3f}s'.format(self.train_duration))
+
+        return yhat
+
+
     def fit_cv(self, x_train, y_train):
 
         print('Training')
@@ -159,14 +224,13 @@ class MultiRocket:
                 yhat = self.classifier._predict_proba_lr(x_train_transform)
             else:
                 yhat.append(self.predict_proba(x_test))
-        elif self.output_model == 'LogisticRegression':
+        elif self.output_model in ['LogisticRegression', 'SGDClassifier']:
             x_train_transform = self.scaler.fit_transform(x_train_transform)
             self.classifier.fit(x_train_transform, y)
             if x_test is None:
-                yhat = self.predict_proba(x_train_transform)
+                yhat = self.classifier.predict_proba(x_train_transform)
             else:
                 yhat.append(self.predict_proba(x_test))
-
         elif self.output_model in ['RidgeRegression', 'ElasticNet']:
             self.regressor.fit(x_train_transform, y)
             if x_test is None:
@@ -178,9 +242,9 @@ class MultiRocket:
 
     def fit(self, x_train, y_train):
         print('Training')
-        _start_time = time.perf_counter()
+        self._start_time = time.perf_counter()
         yhat=self.train_fold(x_train, y_train)
-        self.train_duration = time.perf_counter() - _start_time
+        self.train_duration = time.perf_counter() - self._start_time
         print('Training done!, took {:.3f}s'.format(self.train_duration))
         return yhat
 
@@ -210,27 +274,31 @@ class MultiRocket:
         return yhat
 
 
-    def predict_proba(self, x):
-        print('[{}] Predicting'.format(self.name))
-        start_time = time.perf_counter()
-
+    def transform_x(self, x):
         if self.kernel_selection == 0:
             # swap the axes for minirocket kernels. will standardise the axes in future.
             x = x.swapaxes(1, 2)
             x_test_transform = minirocket.transform(x, self.kernels)
         else:
             x_test_transform = rocket.apply_kernels(x, self.kernels, self.feature_id)
-
-        self.apply_kernel_on_test_duration = time.perf_counter() - start_time
+        self.apply_kernel_on_test_duration = time.perf_counter() - self._start_time
         x_test_transform = np.nan_to_num(x_test_transform)
         print('Kernels applied!, took {:.3f}s. Transformed shape: {}. '.format(self.apply_kernel_on_test_duration,
                                                                                x_test_transform.shape))
-        if self.output_model == 'LogisticRegression':
+        return x_test_transform
+
+
+    def predict_proba(self, x):
+        print('[{}] Predicting'.format(self.name))
+        self._start_time = time.perf_counter()
+        x_test_transform = self.transform_x(x)
+
+        if self.output_model in ['LogisticRegression', 'SGDClassifier']:
             x_test_transform = self.scaler.transform(x_test_transform)
             yhat = self.classifier.predict_proba(x_test_transform)
         else:
             yhat = self.classifier._predict_proba_lr(x_test_transform)
-        self.test_duration = time.perf_counter() - start_time
+        self.test_duration = time.perf_counter() - self._start_time
 
         print("[{}] Predicting completed, took {:.3f}s".format(self.name, self.test_duration))
 
