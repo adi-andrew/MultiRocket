@@ -31,7 +31,8 @@ class MultiRocket:
                  alpha=1e-1,
                  l1_ratio=0.5,
                  max_iter=5,
-                 normalize=True):
+                 normalize=True,
+                 class_weight=None):
         """
         MultiRocket
         :param num_features: number of features
@@ -76,7 +77,7 @@ class MultiRocket:
         elif output_model == 'LogisticRegression':
             self.classifier = LogisticRegression(C=alpha,
                                                  multi_class='multinomial',
-                                                 class_weight='balanced',
+                                                 class_weight=class_weight,
                                                  tol=1e-2,
                                                  max_iter=max_iter,
                                                  solver='lbfgs')
