@@ -553,30 +553,29 @@ class MultiRocket:
         x_train_transform_folds=[]
         x_test_transform_folds=[]
         for i, fold in enumerate(self.foldIds):
+            self._start_time = time.perf_counter()
             print(f'Fitting kernel to fold {i+1}/{N}')
-            x_train_transform = self.fit_kernels(x_train[fold[0]])
-            x_train_transform = self.scaler.fit_transform(x_train_transform)
+            x_train_transform = self.fit_kernels_transform_x(x_train[fold[0]])
             x_train_transform_folds.append(x_train_transform)
 
-            self._start_time = time.perf_counter()
             x_test_transform = self.transform_x(x_train[fold[1]])
-            x_test_transform = self.scaler.transform(x_test_transform)
             x_test_transform_folds.append(x_test_transform)
         return x_train_transform_folds, x_test_transform_folds
 
 
-    def transform_x(self, x, xx=None):
+    def transform_x(self, x, xx=None, scale=True):
         if xx is None:
             xx = np.diff(x, 1)
         x_transform = transform(x, xx,
                                 self.base_parameters,
                                 self.diff1_parameters,
                                 self.n_features_per_kernel)
-
+        if scale:
+            x_transform = self.scaler.transform(x_transform)
         return np.nan_to_num(x_transform)
 
 
-    def fit_kernels(self, x_train):
+    def fit_kernels_transform_x(self, x_train):
         start_time = time.perf_counter()
         if self.verbose > 1:
             print('[{}] Training with training set of {}'.format(self.name, x_train.shape))
@@ -597,12 +596,8 @@ class MultiRocket:
         self.generate_kernel_duration += time.perf_counter() - _start_time
 
         _start_time = time.perf_counter()
-        x_train_transform = self.transform_x(x_train, xx)
-        # x_train_transform = transform(
-        #     x_train, xx,
-        #     self.base_parameters, self.diff1_parameters,
-        #     self.n_features_per_kernel
-        # )
+        x_train_transform = self.transform_x(x_train, xx, scale=False)
+        x_train_transform = self.scaler.fit_transform(x_train_transform)
         self.apply_kernel_on_train_duration += time.perf_counter() - _start_time
 
         elapsed_time = time.perf_counter() - start_time
@@ -617,11 +612,9 @@ class MultiRocket:
         if self.output_model in ['LogisticRegression', 'SGDClassifier']:
             self.classifier.fit(x, y)
             yhat = self.classifier.predict_proba(x_test)
-            
         elif self.output_model in ['RidgeRegression', 'ElasticNet']:
             self.regressor.fit(x, y)
             yhat = self.regressor.predict(x_test)
-
         return yhat
 
 
@@ -654,10 +647,9 @@ class MultiRocket:
     def predict_proba(self, x):
         print('[{}] Predicting'.format(self.name))
         self._start_time = time.perf_counter()
-        x_test_transform = self.transform_x(x)
+        x_test_transform = self.transform_x(x, scale=True)
 
         if self.output_model in ['LogisticRegression', 'SGDClassifier']:
-            x_test_transform = self.scaler.transform(x_test_transform)
             yhat = self.classifier.predict_proba(x_test_transform)
         else:
             yhat = self.classifier._predict_proba_lr(x_test_transform)
@@ -669,16 +661,6 @@ class MultiRocket:
 
 
     def fit(self, x_train, y_train, predict_on_train=True):
-        if self.verbose > 1:
-            print('[{}] Training with training set of {}'.format(self.name, x_train.shape))
-        if x_train.shape[2] < 10:
-            # handling very short series (like PensDigit from the MTSC archive)
-            # series have to be at least a length of 10 (including differencing)
-            _x_train = np.zeros((x_train.shape[0], x_train.shape[1], 10), dtype=x_train.dtype)
-            _x_train[:, :, :x_train.shape[2]] = x_train
-            x_train = _x_train
-            del _x_train
-
         self.generate_kernel_duration = 0
         self.apply_kernel_on_train_duration = 0
         self.train_transforms_duration = 0
@@ -686,50 +668,30 @@ class MultiRocket:
         start_time = time.perf_counter()
 
         _start_time = time.perf_counter()
-        xx = np.diff(x_train, 1)
-        self.train_transforms_duration += time.perf_counter() - _start_time
 
-        _start_time = time.perf_counter()
-        self.base_parameters = fit(
-            x_train,
-            num_features=self.num_kernels
-        )
-        self.diff1_parameters = fit(
-            xx,
-            num_features=self.num_kernels
-        )
-        self.generate_kernel_duration += time.perf_counter() - _start_time
+        if self.verbose > 1:
+            print('[{}] Training with training set of {}'.format(self.name, x_train.shape))
 
-        _start_time = time.perf_counter()
-        x_train_transform = transform(
-            x_train, xx,
-            self.base_parameters, self.diff1_parameters,
-            self.n_features_per_kernel
-        )
-        self.apply_kernel_on_train_duration += time.perf_counter() - _start_time
-
-        x_train_transform = np.nan_to_num(x_train_transform)
-
+        x_train_transform = self.fit_kernels_transform_x(x_train)
         elapsed_time = time.perf_counter() - start_time
         if self.verbose > 1:
             print('[{}] Kernels applied!, took {}s'.format(self.name, elapsed_time))
             print('[{}] Transformed Shape {}'.format(self.name, x_train_transform.shape))
 
+        _start_time = time.perf_counter()
         if self.verbose > 1:
             print('[{}] Training'.format(self.name))
-
-        _start_time = time.perf_counter()
-        self.classifier.fit(x_train_transform, y_train)
+        if self.output_model in ['LogisticRegression', 'SGDClassifier']:
+            self.classifier.fit(x_train_transform, y_train)
+            if predict_on_train:
+                yHat = self.classifier.predict_proba(x_train_transform)
+            else:
+                yHat = []
         self.train_duration = time.perf_counter() - _start_time
-
         if self.verbose > 1:
             print('[{}] Training done!, took {:.3f}s'.format(self.name, self.train_duration))
-        if predict_on_train:
-            yhat = self.classifier.predict(x_train_transform)
-        else:
-            yhat = None
+        return yHat
 
-        return yhat
 
     def predict(self, x):
         if self.verbose > 1:
