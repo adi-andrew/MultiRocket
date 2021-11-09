@@ -7,10 +7,11 @@ import time
 
 import numpy as np
 from numba import njit, prange
-from sklearn.linear_model import RidgeClassifierCV
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
 
 
-@njit("float32[:](float64[:,:,:],int32[:],int32[:],int32[:],int32[:],float32[:])",
+@njit("float32[:](float32[:,:,:],int32[:],int32[:],int32[:],int32[:],float32[:])",
       fastmath=True, parallel=False, cache=True)
 def _fit_biases(X, num_channels_per_combination, channel_indices, dilations, num_features_per_dilation, quantiles):
     num_examples, num_channels, input_length = X.shape
@@ -169,7 +170,7 @@ def fit(X, num_features=10_000, max_dilations_per_kernel=32):
     return num_channels_per_combination, channel_indices, dilations, num_features_per_dilation, biases
 
 
-@njit("float32[:,:](float64[:,:,:],float64[:,:,:],Tuple((int32[:],int32[:],int32[:],int32[:],float32[:])),Tuple((int32[:],int32[:],int32[:],int32[:],float32[:])),int32)",
+@njit("float32[:,:](float32[:,:,:],float32[:,:,:],Tuple((int32[:],int32[:],int32[:],int32[:],float32[:])),Tuple((int32[:],int32[:],int32[:],int32[:],float32[:])),int32)",
       fastmath=True, parallel=True, cache=True)
 def transform(X, X1, parameters, parameters1, n_features_per_kernel=4):
     num_examples, num_channels, input_length = X.shape
@@ -480,8 +481,14 @@ class MultiRocket:
 
     def __init__(
             self,
-            num_features=50000,
-            verbose=0
+            num_features=10000,
+            verbose=0,
+            foldIds=None,
+            output_model='LogisticRegression',
+            max_iter=5,
+            class_weight=None,
+            alpha=1e-1,
+            normalize=True
     ):
         self.name = "MultiRocket"
 
@@ -495,10 +502,40 @@ class MultiRocket:
         if verbose > 1:
             print('[{}] Creating {} with {} kernels'.format(self.name, self.name, self.num_kernels))
 
-        self.classifier = RidgeClassifierCV(
-            alphas=np.logspace(-3, 3, 10),
-            normalize=True
-        )
+        self.foldIds = foldIds
+
+        self.output_model = output_model
+        if output_model == 'RidgeClassifier':
+            self.classifier = RidgeClassifier(alpha=alpha,
+                                            normalize=True)
+        elif output_model == 'LogisticRegression':
+            self.classifier = LogisticRegression(C=alpha,
+                                                 multi_class='multinomial',
+                                                 class_weight=class_weight,
+                                                 tol=1e-1,
+                                                 max_iter=max_iter,
+                                                 solver='lbfgs')
+        elif output_model == 'SGDClassifier':
+            self.classifier = SGDClassifier(loss='log',
+                                            alpha=alpha,
+                                            penalty='l2',
+                                            class_weight='balanced',
+                                            tol=1e-3,
+                                            max_iter=max_iter,
+                                            n_jobs=10)
+        elif output_model == 'RidgeRegression':
+            self.regressor = Ridge(alpha=alpha,
+                                   normalize=True)
+        elif output_model == 'ElasticNet':
+            self.regressor = ElasticNet(alpha=alpha,
+                                        l1_ratio=l1_ratio,
+                                        normalize=True)
+        else:
+            print(f'Unknown output_model {output_model}')
+            exit
+
+        if normalize:
+            self.scaler = StandardScaler(copy=False)
 
         self.train_duration = 0
         self.test_duration = 0
@@ -509,6 +546,127 @@ class MultiRocket:
         self.apply_kernel_on_test_duration = 0
 
         self.verbose = verbose
+
+
+    def fit_all_kernels(self, x_train):
+        N = len(self.foldIds)
+        x_train_transform_folds=[]
+        x_test_transform_folds=[]
+        for i, fold in enumerate(self.foldIds):
+            print(f'Fitting kernel to fold {i+1}/{N}')
+            x_train_transform = self.fit_kernels(x_train[fold[0]])
+            x_train_transform = self.scaler.fit_transform(x_train_transform)
+            x_train_transform_folds.append(x_train_transform)
+
+            self._start_time = time.perf_counter()
+            x_test_transform = self.transform_x(x_train[fold[1]])
+            x_test_transform = self.scaler.transform(x_test_transform)
+            x_test_transform_folds.append(x_test_transform)
+        return x_train_transform_folds, x_test_transform_folds
+
+
+    def transform_x(self, x, xx=None):
+        if xx is None:
+            xx = np.diff(x, 1)
+        x_transform = transform(x, xx,
+                                self.base_parameters,
+                                self.diff1_parameters,
+                                self.n_features_per_kernel)
+
+        return np.nan_to_num(x_transform)
+
+
+    def fit_kernels(self, x_train):
+        start_time = time.perf_counter()
+        if self.verbose > 1:
+            print('[{}] Training with training set of {}'.format(self.name, x_train.shape))
+
+        _start_time = time.perf_counter()
+        xx = np.diff(x_train, 1)
+        self.train_transforms_duration += time.perf_counter() - _start_time
+
+        _start_time = time.perf_counter()
+        self.base_parameters = fit(
+            x_train,
+            num_features=self.num_kernels
+        )
+        self.diff1_parameters = fit(
+            xx,
+            num_features=self.num_kernels
+        )
+        self.generate_kernel_duration += time.perf_counter() - _start_time
+
+        _start_time = time.perf_counter()
+        x_train_transform = self.transform_x(x_train, xx)
+        # x_train_transform = transform(
+        #     x_train, xx,
+        #     self.base_parameters, self.diff1_parameters,
+        #     self.n_features_per_kernel
+        # )
+        self.apply_kernel_on_train_duration += time.perf_counter() - _start_time
+
+        elapsed_time = time.perf_counter() - start_time
+        if self.verbose > 1:
+            print('[{}] Kernels applied!, took {}s'.format(self.name, elapsed_time))
+            print('[{}] Transformed Shape {}'.format(self.name, x_train_transform.shape))
+
+        return x_train_transform
+
+
+    def train_fold_on_kernel(self, x, y, x_test=None, yhat=None):
+        if self.output_model in ['LogisticRegression', 'SGDClassifier']:
+            self.classifier.fit(x, y)
+            yhat = self.classifier.predict_proba(x_test)
+            
+        elif self.output_model in ['RidgeRegression', 'ElasticNet']:
+            self.regressor.fit(x, y)
+            yhat = self.regressor.predict(x_test)
+
+        return yhat
+
+
+    def fit_cv_to_kernels(self, x_train, x_test, y_train):
+
+        print('Training')
+        self._start_time = time.perf_counter()
+
+        yhat=[]
+        N = len(self.foldIds)
+        for i, fold in enumerate(self.foldIds):
+            if self.output_model == 'LogisticRegression':
+                if i == 0:
+                    self.classifier.warm_start = False
+                else:
+                    self.classifier.warm_start = True
+            print(f'Traning fold {i+1}/{N}')
+            yhat.append(self.train_fold_on_kernel(x=x_train[i],
+                                             y=y_train[fold[0]],
+                                             x_test=x_test[i],
+                                             yhat=yhat))
+
+        self.train_duration = time.perf_counter() - self._start_time
+
+        print('Training done!, took {:.3f}s'.format(self.train_duration))
+
+        return yhat
+        
+
+    def predict_proba(self, x):
+        print('[{}] Predicting'.format(self.name))
+        self._start_time = time.perf_counter()
+        x_test_transform = self.transform_x(x)
+
+        if self.output_model in ['LogisticRegression', 'SGDClassifier']:
+            x_test_transform = self.scaler.transform(x_test_transform)
+            yhat = self.classifier.predict_proba(x_test_transform)
+        else:
+            yhat = self.classifier._predict_proba_lr(x_test_transform)
+        self.test_duration = time.perf_counter() - self._start_time
+
+        print("[{}] Predicting completed, took {:.3f}s".format(self.name, self.test_duration))
+
+        return yhat
+
 
     def fit(self, x_train, y_train, predict_on_train=True):
         if self.verbose > 1:
