@@ -32,7 +32,8 @@ class MultiRocket:
                  l1_ratio=0.5,
                  max_iter=5,
                  normalize=True,
-                 class_weight=None):
+                 class_weight=None,
+                 warm_start=False):
         """
         MultiRocket
         :param num_features: number of features
@@ -78,7 +79,7 @@ class MultiRocket:
             self.classifier = LogisticRegression(C=alpha,
                                                  multi_class='multinomial',
                                                  class_weight=class_weight,
-                                                 tol=1e-2,
+                                                 tol=1e-1,
                                                  max_iter=max_iter,
                                                  solver='lbfgs')
         elif output_model == 'SGDClassifier':
@@ -100,6 +101,8 @@ class MultiRocket:
             print(f'Unknown output_model {output_model}')
             exit
 
+        self.warm_start = warm_start
+
         if normalize:
             self.scaler = StandardScaler(copy=False)
 
@@ -108,6 +111,51 @@ class MultiRocket:
         self.generate_kernel_duration = 0
         self.apply_kernel_on_train_duration = 0
         self.apply_kernel_on_test_duration = 0
+
+
+    def reinit_model(self,
+                     foldIds,
+                     output_model,
+                     alpha=1e-1,
+                     max_iter=10,
+                     class_weight=None):
+
+        self.foldIds = foldIds
+        self.output_model = output_model
+        if output_model == 'RidgeClassifier':
+            self.classifier = RidgeClassifier(alpha=alpha,
+                                            normalize=True)
+        elif output_model == 'LogisticRegression':
+            self.classifier = LogisticRegression(C=alpha,
+                                                 multi_class='multinomial',
+                                                 class_weight=class_weight,
+                                                 tol=1e-1,
+                                                 max_iter=max_iter,
+                                                 solver='lbfgs')
+        elif output_model == 'SGDClassifier':
+            self.classifier = SGDClassifier(loss='log',
+                                            alpha=alpha,
+                                            penalty='l2',
+                                            class_weight='balanced',
+                                            tol=1e-3,
+                                            max_iter=max_iter,
+                                            n_jobs=10)
+        elif output_model == 'RidgeRegression':
+            self.regressor = Ridge(alpha=alpha)
+        elif output_model == 'ElasticNet':
+            self.regressor = ElasticNet(alpha=alpha,
+                                        l1_ratio=l1_ratio,
+                                        normalize=True)
+        else:
+            print(f'Unknown output_model {output_model}')
+            exit
+
+        self.train_duration = 0
+        self.test_duration = 0
+        self.generate_kernel_duration = 0
+        self.apply_kernel_on_train_duration = 0
+        self.apply_kernel_on_test_duration = 0
+
 
     def fit_kernels(self, x_train):
         start_time = time.perf_counter()
@@ -163,15 +211,36 @@ class MultiRocket:
         return x_train_transform_folds, x_test_transform_folds
 
 
+    def transform_all_kernels(self, x_train):
+        N = len(self.foldIds)
+        x_train_transform_folds=[]
+        x_test_transform_folds=[]
+        for i, fold in enumerate(self.foldIds):
+            self._start_time = time.perf_counter()
+            print(f'Fitting kernel to fold {i+1}/{N}')
+            x_train_transform = self.transform_x(x_train[fold[0]])
+            x_train_transform = self.scaler.transform(x_train_transform)
+            x_train_transform_folds.append(x_train_transform)
+
+            x_test_transform = self.transform_x(x_train[fold[1]])
+            x_test_transform = self.scaler.transform(x_test_transform)
+            x_test_transform_folds.append(x_test_transform)
+        return x_train_transform_folds, x_test_transform_folds
+
+
     def train_fold_on_kernel(self, x, y, x_test=None, yhat=None):
         if self.output_model in ['LogisticRegression', 'SGDClassifier']:
             self.classifier.fit(x, y)
-            yhat = self.classifier.predict_proba(x_test)
-            
+            if x_test is None:
+                yhat = self.classifier.predict_proba(x)
+            else:
+                yhat = self.classifier.predict_proba(x_test)
         elif self.output_model in ['RidgeRegression', 'ElasticNet']:
             self.regressor.fit(x, y)
-            yhat = self.regressor.predict(x_test)
-
+            if x_test is None:
+                yhat = self.regressor.predict(x)
+            else:
+                yhat = self.regressor.predict(x_test)
         return yhat
 
 
@@ -183,6 +252,11 @@ class MultiRocket:
         yhat=[]
         N = len(self.foldIds)
         for i, fold in enumerate(self.foldIds):
+            if self.output_model == 'LogisticRegression':
+                if i == 0:
+                    self.classifier.warm_start = False
+                else:
+                    self.classifier.warm_start = True
             print(f'Traning fold {i+1}/{N}')
             yhat.append(self.train_fold_on_kernel(x=x_train[i],
                                              y=y_train[fold[0]],
@@ -250,6 +324,16 @@ class MultiRocket:
         return yhat
 
 
+    def fit_output_layer(self, x_train, y_train):
+        print('Training')
+        self._start_time = time.perf_counter()
+        x_train_transform = self.transform_x(x_train)
+        x_train_transform = self.scaler.transform(x_train_transform)
+        yhat = self.train_fold_on_kernel(x_train_transform, y_train)
+        print('Training done!, took {:.3f}s'.format(self.train_duration))
+        return yhat
+
+
     def predict(self, x):
         print('[{}] Predicting'.format(self.name))
         start_time = time.perf_counter()
@@ -284,6 +368,21 @@ class MultiRocket:
             x_test_transform = rocket.apply_kernels(x, self.kernels, self.feature_id)
         self.apply_kernel_on_test_duration = time.perf_counter() - self._start_time
         x_test_transform = np.nan_to_num(x_test_transform)
+        print('Kernels applied!, took {:.3f}s. Transformed shape: {}. '.format(self.apply_kernel_on_test_duration,
+                                                                               x_test_transform.shape))
+        return x_test_transform
+
+
+    def transform_scale_x(self, x):
+        if self.kernel_selection == 0:
+            # swap the axes for minirocket kernels. will standardise the axes in future.
+            x = x.swapaxes(1, 2)
+            x_test_transform = minirocket.transform(x, self.kernels)
+        else:
+            x_test_transform = rocket.apply_kernels(x, self.kernels, self.feature_id)
+        self.apply_kernel_on_test_duration = time.perf_counter() - self._start_time
+        x_test_transform = np.nan_to_num(x_test_transform)
+        x_test_transform = self.scaler.transform(x_test_transform)
         print('Kernels applied!, took {:.3f}s. Transformed shape: {}. '.format(self.apply_kernel_on_test_duration,
                                                                                x_test_transform.shape))
         return x_test_transform
