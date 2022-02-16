@@ -6,6 +6,8 @@
 import time
 
 import numpy as np
+import sklearn.utils # needed for pyinstaller
+
 from sklearn.linear_model import Ridge
 from sklearn.linear_model import RidgeClassifier
 from sklearn.linear_model import ElasticNet

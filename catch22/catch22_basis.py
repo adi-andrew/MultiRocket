@@ -9,7 +9,7 @@ from numba import njit
 # =======================================================================================================
 # Catch22 basis Operations
 # =======================================================================================================
-from utils.tools import numba_linear_regression
+from mr_utils.tools import numba_linear_regression
 
 
 @njit(fastmath=True, cache=True)

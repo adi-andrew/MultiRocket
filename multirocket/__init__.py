@@ -13,7 +13,7 @@ from catch22.catch22_full import sb_binarystats_mean_longstretch_1, sb_motif_thr
     dn_outlier_include_p_001_mdrmd, dn_outlier_include_n_001_mdrmd, sp_summaries_welch_rect_area_5_1, \
     sb_binarystats_diff_longstretch_0, sc_fluct_anal_2_rsrangefit_50_1_logi_prop_r1, \
     sc_fluct_anal_2_dfa_50_1_2_logi_prop_r1, sp_summaries_welch_rect_centroid, fc_local_simple_mean3_stderr
-from utils.tools import numba_fft_v, autocorr
+from mr_utils.tools import numba_fft_v, autocorr
 
 # Original Rocket is feature 50 with Rocket Kernels
 # Original MiniRocket is feature 23 with Minirocket Kernels

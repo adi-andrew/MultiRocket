@@ -13,7 +13,7 @@ from numba import njit
 # =======================================================================================================
 from catch22.catch22_basis import histogram_mode, outlier_include, summaries_welth_rect, local_simple_mean, \
     co_first_zero, fluct_prop, splinefit
-from utils.tools import autocorr, numba_std, numba_fft_v
+from mr_utils.tools import autocorr, numba_std, numba_fft_v
 
 
 @njit(fastmath=True, cache=True)
