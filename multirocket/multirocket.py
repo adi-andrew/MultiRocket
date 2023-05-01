@@ -21,6 +21,8 @@ from multirocket import feature_names, get_feature_set
 from multirocket import minirocket_multivariate as minirocket  # use multivariate version.
 from multirocket import rocket as rocket
 
+import logging
+logger = logging.getLogger(__name__)
 
 class MultiRocket:
 
@@ -63,10 +65,10 @@ class MultiRocket:
         fixed_features_list = [feature_names[x] for x in self.fixed_features]
         optional_features_list = [feature_names[x] for x in self.optional_features]
         self.feature_list = fixed_features_list + optional_features_list
-        print('FeatureID: {} -- features for each kernel: {}'.format(self.feature_id, self.feature_list))
+        logger.info('FeatureID: {} -- features for each kernel: {}'.format(self.feature_id, self.feature_list))
 
-        print('Creating {} with {} kernels'.format(self.name, self.num_kernels))
-        # print('Using time series split')
+        logger.info('Creating {} with {} kernels'.format(self.name, self.num_kernels))
+        # logger.info('Using time series split')
         # cv = TimeSeriesSplit(5)
         # self.classifier = RidgeClassifierCV(alphas=np.logspace(-3, 3, 10),
         #                                     normalize=True,
@@ -100,7 +102,7 @@ class MultiRocket:
                                         l1_ratio=l1_ratio,
                                         normalize=True)
         else:
-            print(f'Unknown output_model {output_model}')
+            logger.info(f'Unknown output_model {output_model}')
             exit
 
         self.warm_start = warm_start
@@ -149,7 +151,7 @@ class MultiRocket:
                                         l1_ratio=l1_ratio,
                                         normalize=True)
         else:
-            print(f'Unknown output_model {output_model}')
+            logger.info(f'Unknown output_model {output_model}')
             exit
 
         self.train_duration = 0
@@ -162,7 +164,7 @@ class MultiRocket:
     def fit_kernels(self, x_train):
         start_time = time.perf_counter()
 
-        print('[{}] Training with training set of {}'.format(self.name, x_train.shape))
+        logger.info('[{}] Training with training set of {}'.format(self.name, x_train.shape))
         if self.kernel_selection == 0:
             # swap the axes for minirocket kernels. will standardise the axes in future.
             x_train = x_train.swapaxes(1, 2)
@@ -191,8 +193,8 @@ class MultiRocket:
         x_train_transform = np.nan_to_num(x_train_transform)
 
         elapsed_time = time.perf_counter() - start_time
-        print('Kernels applied!, took {}s'.format(elapsed_time))
-        print('Transformed Shape {}'.format(x_train_transform.shape))
+        logger.info('Kernels applied!') #, took {}s'.format(elapsed_time))
+        logger.info('Transformed Shape {}'.format(x_train_transform.shape))
         return x_train_transform
 
 
@@ -201,7 +203,7 @@ class MultiRocket:
         x_train_transform_folds=[]
         x_test_transform_folds=[]
         for i, fold in enumerate(self.foldIds):
-            print(f'Fitting kernel to fold {i+1}/{N}')
+            logger.info(f'Fitting kernel to fold {i+1}/{N}')
             x_train_transform = self.fit_kernels(x_train[fold[0]])
             x_train_transform = self.scaler.fit_transform(x_train_transform)
             x_train_transform_folds.append(x_train_transform)
@@ -219,7 +221,7 @@ class MultiRocket:
         x_test_transform_folds=[]
         for i, fold in enumerate(self.foldIds):
             self._start_time = time.perf_counter()
-            print(f'Fitting kernel to fold {i+1}/{N}')
+            logger.info(f'Fitting kernel to fold {i+1}/{N}')
             x_train_transform = self.transform_x(x_train[fold[0]])
             x_train_transform = self.scaler.transform(x_train_transform)
             x_train_transform_folds.append(x_train_transform)
@@ -248,7 +250,7 @@ class MultiRocket:
 
     def fit_cv_to_kernels(self, x_train, x_test, y_train):
 
-        print('Training')
+        logger.info('Training')
         self._start_time = time.perf_counter()
 
         yhat=[]
@@ -259,7 +261,7 @@ class MultiRocket:
                     self.classifier.warm_start = False
                 else:
                     self.classifier.warm_start = True
-            print(f'Traning fold {i+1}/{N}')
+            logger.info(f'Traning fold {i+1}/{N}')
             yhat.append(self.train_fold_on_kernel(x=x_train[i],
                                              y=y_train[fold[0]],
                                              x_test=x_test[i],
@@ -267,20 +269,20 @@ class MultiRocket:
 
         self.train_duration = time.perf_counter() - self._start_time
 
-        print('Training done!, took {:.3f}s'.format(self.train_duration))
+        logger.info('Training done!, took {:.3f}s'.format(self.train_duration))
 
         return yhat
 
 
     def fit_cv(self, x_train, y_train):
 
-        print('Training')
+        logger.info('Training')
         _start_time = time.perf_counter()
 
         yhat=[]
         N = len(self.foldIds)
         for i, fold in enumerate(self.foldIds):
-            print(f'Traning fold {i+1}/{N}')
+            logger.info(f'Traning fold {i+1}/{N}')
             yhat = self.train_fold(x=x_train[fold[0]],
                                    y=y_train[fold[0]],
                                    x_test=x_train[fold[1]],
@@ -288,7 +290,7 @@ class MultiRocket:
 
         self.train_duration = time.perf_counter() - _start_time
 
-        print('Training done!, took {:.3f}s'.format(self.train_duration))
+        logger.info('Training done!, took {:.3f}s'.format(self.train_duration))
 
         return yhat
 
@@ -318,26 +320,26 @@ class MultiRocket:
 
 
     def fit(self, x_train, y_train):
-        print('Training')
+        logger.info('Training')
         self._start_time = time.perf_counter()
         yhat=self.train_fold(x_train, y_train)
         self.train_duration = time.perf_counter() - self._start_time
-        print('Training done!, took {:.3f}s'.format(self.train_duration))
+        logger.info('Training done!, took {:.3f}s'.format(self.train_duration))
         return yhat
 
 
     def fit_output_layer(self, x_train, y_train):
-        print('Training')
+        logger.info('Training')
         self._start_time = time.perf_counter()
         x_train_transform = self.transform_x(x_train)
         x_train_transform = self.scaler.transform(x_train_transform)
         yhat = self.train_fold_on_kernel(x_train_transform, y_train)
-        print('Training done!, took {:.3f}s'.format(self.train_duration))
+        logger.info('Training done!, took {:.3f}s'.format(self.train_duration))
         return yhat
 
 
     def predict(self, x):
-        print('[{}] Predicting'.format(self.name))
+        logger.info('[{}] Predicting'.format(self.name))
         start_time = time.perf_counter()
 
         if self.kernel_selection == 0:
@@ -350,13 +352,13 @@ class MultiRocket:
 
         self.apply_kernel_on_test_duration = time.perf_counter() - start_time
         x_test_transform = np.nan_to_num(x_test_transform)
-        print('Kernels applied!, took {:.3f}s. Transformed shape: {}. '.format(self.apply_kernel_on_test_duration,
+        logger.info('Kernels applied!. Transformed shape: {}. '.format(self.apply_kernel_on_test_duration,
                                                                                x_test_transform.shape))
 
         yhat = self.classifier.predict(x_test_transform)
         self.test_duration = time.perf_counter() - start_time
 
-        print("[{}] Predicting completed, took {:.3f}s".format(self.name, self.test_duration))
+        logger.info("[{}] Predicting completed, took {:.3f}s".format(self.name, self.test_duration))
 
         return yhat
 
@@ -370,7 +372,7 @@ class MultiRocket:
             x_test_transform = rocket.apply_kernels(x, self.kernels, self.feature_id)
         self.apply_kernel_on_test_duration = time.perf_counter() - self._start_time
         x_test_transform = np.nan_to_num(x_test_transform)
-        print('Kernels applied!, took {:.3f}s. Transformed shape: {}. '.format(self.apply_kernel_on_test_duration,
+        logger.info('Kernels applied!. Transformed shape: {}. '.format(self.apply_kernel_on_test_duration,
                                                                                x_test_transform.shape))
         return x_test_transform
 
@@ -385,13 +387,13 @@ class MultiRocket:
         self.apply_kernel_on_test_duration = time.perf_counter() - self._start_time
         x_test_transform = np.nan_to_num(x_test_transform)
         x_test_transform = self.scaler.transform(x_test_transform)
-        print('Kernels applied!, took {:.3f}s. Transformed shape: {}. '.format(self.apply_kernel_on_test_duration,
+        logger.info('Kernels applied!. Transformed shape: {}. '.format(self.apply_kernel_on_test_duration,
                                                                                x_test_transform.shape))
         return x_test_transform
 
 
     def predict_proba(self, x):
-        print('[{}] Predicting'.format(self.name))
+        logger.info('[{}] Predicting'.format(self.name))
         self._start_time = time.perf_counter()
         x_test_transform = self.transform_x(x)
 
@@ -402,13 +404,13 @@ class MultiRocket:
             yhat = self.classifier._predict_proba_lr(x_test_transform)
         self.test_duration = time.perf_counter() - self._start_time
 
-        print("[{}] Predicting completed, took {:.3f}s".format(self.name, self.test_duration))
+        logger.info("[{}] Predicting completed, took {:.3f}s".format(self.name, self.test_duration))
 
         return yhat
 
 
     def predict_linear(self, x):
-        print('[{}] Predicting'.format(self.name))
+        logger.info('[{}] Predicting'.format(self.name))
         start_time = time.perf_counter()
 
         if self.kernel_selection == 0:
@@ -421,12 +423,12 @@ class MultiRocket:
 
         self.apply_kernel_on_test_duration = time.perf_counter() - start_time
         x_test_transform = np.nan_to_num(x_test_transform)
-        print('Kernels applied!, took {:.3f}s. Transformed shape: {}. '.format(self.apply_kernel_on_test_duration,
+        logger.info('Kernels applied!. Transformed shape: {}. '.format(self.apply_kernel_on_test_duration,
                                                                                x_test_transform.shape))
 
         yhat = self.regressor.predict(x_test_transform)
         self.test_duration = time.perf_counter() - start_time
 
-        print("[{}] Predicting completed, took {:.3f}s".format(self.name, self.test_duration))
+        logger.info("[{}] Predicting completed, took {:.3f}s".format(self.name, self.test_duration))
 
         return yhat
